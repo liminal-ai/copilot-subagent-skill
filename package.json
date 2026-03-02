@@ -1,0 +1,12 @@
+{
+  "name": "copilot-subagent-skill",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "bun run scripts/build-artifacts.ts",
+    "deploy": "bun run scripts/deploy-local.ts",
+    "release:local": "bun run scripts/release-local.ts",
+    "verify": "bun run scripts/verify.ts"
+  }
+}

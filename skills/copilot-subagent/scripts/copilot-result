@@ -1,0 +1,151 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SESSION_DIR="$HOME/.copilot/session-state"
+USE_NPX=false
+RAW_TOOLS=false
+DEFAULT_AVAILABLE_TOOLS=(report_intent bash apply_patch view rg glob)
+
+usage() {
+  cat <<'USAGE'
+copilot-result — Run Copilot CLI and extract structured data from sessions.
+
+Usage:
+  copilot-result [--npx] [--raw-tools] <mode> [args...]
+
+Modes:
+  exec "prompt" [flags...]   Run copilot (-p and -s implied; pass permission flags)
+  last [session-id]          Last agent message (default: latest session)
+  messages [session-id]      All agent messages
+  session-id                 Latest session ID
+  tools [session-id]         Tool calls with names and arguments
+  reasoning [session-id]     Reasoning/thinking summaries
+  summary [session-id]       Session ID + model + last message
+
+Global flags:
+  --npx        Use npx -y @github/copilot (portable, no global install needed)
+  --raw-tools  Disable default tool constraints for exec mode
+
+exec mode defaults:
+  - Adds: --disable-builtin-mcps
+  - Adds: --available-tools report_intent bash apply_patch view rg glob
+  - Use --raw-tools to get Copilot's default full toolset
+
+By default, uses the `copilot` command. If not installed, suggests --npx.
+
+Examples:
+  copilot-result exec "Fix the bug in main.ts" --allow-all
+  copilot-result --raw-tools exec "Review my changes" --allow-all
+  copilot-result last
+  copilot-result last abc123-def456
+  copilot-result --npx exec "Review this code" --allow-all
+  copilot-result summary
+USAGE
+}
+
+resolve_cmd() {
+  if $USE_NPX; then
+    echo "npx -y @github/copilot"
+    return 0
+  fi
+  if command -v copilot &>/dev/null; then
+    echo "copilot"
+    return 0
+  fi
+  echo "Error: copilot CLI not found." >&2
+  echo "Install:  npm install -g @github/copilot@latest" >&2
+  echo "Or use:   copilot-result --npx exec \"your prompt\"" >&2
+  return 1
+}
+
+resolve_jsonl() {
+  local id="${1:-}"
+  if [[ -n "$id" ]]; then
+    local path="$SESSION_DIR/$id/events.jsonl"
+    if [[ ! -f "$path" ]]; then
+      echo "Session not found: $id" >&2
+      return 1
+    fi
+    echo "$path"
+  else
+    local latest
+    latest=$(ls -t "$SESSION_DIR" 2>/dev/null | head -1)
+    if [[ -z "$latest" ]]; then
+      echo "No sessions found in $SESSION_DIR" >&2
+      return 1
+    fi
+    echo "$SESSION_DIR/$latest/events.jsonl"
+  fi
+}
+
+# Parse global flags
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --npx) USE_NPX=true; shift ;;
+    --raw-tools) RAW_TOOLS=true; shift ;;
+    -h|--help) usage; exit 0 ;;
+    *) break ;;
+  esac
+done
+
+if [[ $# -lt 1 ]]; then
+  usage
+  exit 0
+fi
+
+mode="$1"
+shift
+
+case "$mode" in
+  exec)
+    cmd=$(resolve_cmd) || exit 1
+    prompt="${1:?Error: exec requires a prompt}"
+    shift
+    # -p for non-interactive, -s for silent (response only)
+    # Caller passes permission flags (--allow-all, --allow-tool, etc.)
+    exec_args=(-p "$prompt" -s)
+    if ! $RAW_TOOLS; then
+      exec_args+=(--disable-builtin-mcps --available-tools "${DEFAULT_AVAILABLE_TOOLS[@]}")
+    fi
+    exec_args+=("$@")
+    $cmd "${exec_args[@]}"
+    ;;
+  last)
+    jsonl=$(resolve_jsonl "${1:-}") || exit 1
+    jq -rs '[.[] | select(.type=="assistant.message" and .data.content != "") | .data.content] | last' "$jsonl"
+    ;;
+  messages)
+    jsonl=$(resolve_jsonl "${1:-}") || exit 1
+    jq -r 'select(.type=="assistant.message" and .data.content != "") | .data.content' "$jsonl"
+    ;;
+  session-id)
+    if [[ -n "${1:-}" ]]; then
+      jsonl=$(resolve_jsonl "$1") || exit 1
+      jq -r 'select(.type=="session.start") | .data.sessionId' "$jsonl"
+    else
+      ls -t "$SESSION_DIR" 2>/dev/null | head -1
+    fi
+    ;;
+  tools)
+    jsonl=$(resolve_jsonl "${1:-}") || exit 1
+    jq -c 'select(.type=="tool.execution_start") | {tool: .data.toolName, args: .data.arguments}' "$jsonl"
+    ;;
+  reasoning)
+    jsonl=$(resolve_jsonl "${1:-}") || exit 1
+    jq -r 'select(.type=="assistant.message" and .data.reasoningText != null and .data.reasoningText != "") | .data.reasoningText' "$jsonl"
+    ;;
+  summary)
+    jsonl=$(resolve_jsonl "${1:-}") || exit 1
+    sid=$(jq -r 'select(.type=="session.start") | .data.sessionId' "$jsonl")
+    model=$(jq -r 'select(.type=="session.model_change") | .data.newModel' "$jsonl" 2>/dev/null | tail -1)
+    echo "SESSION: $sid"
+    [[ -n "$model" ]] && echo "MODEL: $model"
+    echo "---"
+    jq -rs '[.[] | select(.type=="assistant.message" and .data.content != "") | .data.content] | last' "$jsonl"
+    ;;
+  *)
+    echo "Unknown mode: $mode" >&2
+    usage >&2
+    exit 1
+    ;;
+esac

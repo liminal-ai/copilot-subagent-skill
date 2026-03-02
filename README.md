@@ -18,6 +18,8 @@ Current version: `v0.1.0`.
 copilot-subagent-skill/
   README.md
   CHANGELOG.md
+  claude.md
+  agents.md
   package.json
   .gitignore
   skills/
@@ -104,14 +106,33 @@ Use `--allow-dirty` to continue when the working tree is not clean (default beha
 ## Manual GitHub release process (for now)
 
 No CI release workflow is active in `v0.1.0`.
+`dist/` is gitignored, so release artifacts must be uploaded manually for every version.
 
 Manual process:
 
 1. `bun run release:local`
 2. `git push origin <branch>`
-3. `git push origin v0.1.0`
-4. create a GitHub Release for `v0.1.0`
-5. upload `dist/*.zip` and `dist/*.skill`
+3. `git push origin v<version>`
+4. create a GitHub Release and upload artifacts in one step:
+
+```bash
+gh release create v<version> \
+  dist/copilot-subagent-v<version>.zip \
+  dist/copilot-subagent-v<version>.skill \
+  --repo liminal-ai/copilot-subagent-skill \
+  --title "v<version>" \
+  --notes "Release v<version>."
+```
+
+If the release already exists, upload/replace assets:
+
+```bash
+gh release upload v<version> \
+  dist/copilot-subagent-v<version>.zip \
+  dist/copilot-subagent-v<version>.skill \
+  --repo liminal-ai/copilot-subagent-skill \
+  --clobber
+```
 
 ## Versioning policy
 
